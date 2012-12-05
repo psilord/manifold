@@ -19,3 +19,5 @@ Initially based on Self Organizing Map algorithms.
 ;;; All Rights Reserved.
 ;;; 
 </pre>
+
+Ugur: Testing commits.
