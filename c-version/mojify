@@ -1,0 +1,1304 @@
+#! /usr/bin/perl -w
+
+use strict;
+
+# A shitty recursive descent parser for a crappy language used to describe a
+# collection of sections and thier connections as a cortex. Once the parsing
+# and data gathering is finished, the data is manhandled to figure out the
+# various implicit values (like section symbol dimension) based upon the 
+# physical structure of the cortex and integration paths.
+
+# XXX um, the error checking is kinda shitty, like no typechecker, so make damn
+# sure that you only specify correct dataflow sections...
+
+# XXX Output channels are a serious hack and are treated as a special case
+# entity. Only a section can output to an output channel, and one section
+# may only output to one output channel. One output channel can only 
+# accept input from one section. Because of the more fucked up rules concerning
+# output channels, I added some more syntax and type checking concerning them
+# so you'll know when you write something incorrectly. Also, the notion
+# of propogating and not propogating are ignored when dealing with the output
+# channels. If a section has an output channel, it ALWAYS puts output into the
+# output channel regardless of the propogation property. The C engine for the
+# cortex enforces that aspect of output channels.
+
+# This contains the sections, execution order, and dataflow graph
+my %cortex;
+my ($file, $outfile);
+my $inp;
+
+$file = shift;
+die "Please supply a file to translate." if !(defined($file));
+
+$outfile = shift;
+if (!defined($outfile))
+{
+	$outfile = "a.lctx";
+}
+
+if ($outfile eq $file)
+{
+	die "Oops. You specified the output file to be the same as the input file!";
+}
+
+open(INP, "<$file") or die "Could not open file: $file ($!)";
+$inp = *INP;
+
+# parse the file into a hash of hashes
+%cortex = match_cortex($inp);
+close $inp;
+
+# dump just what I read from the file, with no computed decorations.
+#dump_load_to_stdout(\%cortex);
+
+# determine the concrete array indicies for each section an emitter must write
+# its integration results into. Inputs are treated just like sections for
+# this purpose.
+connect_emitters_to_acceptor(\%cortex);
+
+# this is a seperate pass to figure out which section is a propogating section
+# or a consuming section.
+compute_propogations(\%cortex);
+
+# determine the dimensional size of the som contained in each section
+compute_dimensions(\%cortex);
+
+# figure out the integration queue information per section...
+compute_integration_queue_parameters(\%cortex);
+
+# construct unique id numbers starting from zero for the input channels
+# and the sections
+compute_serial_numbers(\%cortex);
+
+# figure out how many observations each node in a participating reverse lookup
+# needs from the perspective of a root node, for every root node in the graph
+compute_observations(\%cortex);
+
+# dump out the decoration information in the cortex I deduced above
+#dump_decorations_to_stdout(\%cortex);
+
+# print out the fully formed config file
+emit_lowlevel_desc(\%cortex, $outfile);
+
+# all done!
+exit 0;
+
+# ------------------------------------------------------------------------------
+
+# read out of the file handle until I find a line with some meat in it.
+# then process it for comments and stuff and return it
+sub getline
+{
+	my $finp = shift(@_);
+	my $line;
+
+	while(defined($line = <$inp>))
+	{
+		# trash stuff after the first '#' character (including the #)
+		$line =~ s/(.*?)#.*/$1/;
+		
+		# get rid of whitespace before nonwhitespace characters
+		$line =~ s/^\s*//;
+
+		# get rid of whitespace after nonwhitespace characters
+		$line =~ s/\s*$//;
+
+		# get rid of the line if it is just empty after the above xfroms
+		next if $line =~ /^$/;
+
+		# if we get here, then the line has some meaningful stuff in it.
+
+		last;
+	}
+
+	return $line;
+}
+
+sub match
+{
+	my $found = shift(@_);
+	my $wanted = shift(@_);
+
+	if ($found eq $wanted)
+	{
+		return 1;
+	}
+
+	return 0;
+}
+
+sub parse_error
+{
+	my $msg = shift(@_);
+	my $found = shift(@_);
+
+	print "Parse Error:\n";
+	print "\tExpected: $msg\n";
+	print "\tFound: $found\n";
+
+	die "\tAborting";
+}
+
+sub match_cortex
+{
+	my $finp = shift(@_);
+	my $line;
+	my %tmp;
+	my %cortex = ();
+
+	$line = getline($finp);
+	if (!match($line, "Cortex")) {
+		parse_error("'Cortex' token", $line);
+	}
+
+	$cortex{'sections'} = match_sections($finp);
+
+	# This gets figured out now automatically but I'll keep this here until
+	# I KNOW it is correct....
+	#$cortex{'execution'} = match_execution($finp);
+
+	$cortex{'dataflow'} = match_dataflow($finp);
+
+	$line = getline($finp);
+	if (!match($line, "End")) {
+		parse_error("Cortex 'End' token", $line);
+	}
+
+	return %cortex;
+}
+
+sub match_sections
+{
+	my $finp = shift(@_);
+	my $line;
+	my %sections = ();
+	my $sechref;
+	my ($id);
+
+	# match one or more sections building a hash table of them, then return
+	# the hash table when finished
+
+	$line = getline($finp);
+	if (!match($line, "Sections")) {
+		parse_error("'Sections' token", $line);
+	}
+
+	# read as many sections as I need to
+
+	$id = 0;
+	$line = getline($finp);
+	while(!match($line, "End"))
+	{
+		$sechref = match_section($finp, $line);
+		$sections{$sechref->{'name'}} = $sechref;
+
+		$line = getline($finp);
+	}
+	
+	if (!match($line, "End")) {
+		parse_error("Sections 'End' token", $line);
+	}
+
+	return \%sections;
+}
+
+sub match_section
+{
+	my $finp = shift(@_);
+	my $lookahead = shift(@_);
+	my $line;
+	my ($junk, $x, $y);
+	my ($rows, $cols);
+	my $iter;
+	my %section = ();
+
+	# get the name of a section
+	$line = $lookahead;
+	$section{'name'} = $line;
+
+	# get the location of the section
+	$line = getline($finp);
+	($x, $y) = split /\,/, ((split /:/, $line)[1]);
+	$x =~ s/\s*//g;
+	$y =~ s/\s*//g;
+	$section{'x'} = $x;
+	$section{'y'} = $y;
+
+	# get the rows/cols of the section
+	$line = getline($finp);
+	($rows, $cols) = split /\,/, ((split /:/, $line)[1]);
+	$rows =~ s/\s*//g;
+	$cols =~ s/\s*//g;
+	$section{'rows'} = $rows;
+	$section{'cols'} = $cols;
+
+	# get the training iterations
+	$line = getline($finp);
+	($junk, $iter) = split /:/, $line;
+	$iter =~ s/\s*//g;
+	$section{'iter'} = $iter;
+
+	return \%section;
+}
+
+sub match_execution
+{
+	my $finp = shift(@_);
+	my $line;
+	my @exec;
+	
+	$line = getline($finp);
+	if ($line !~ m/Execution/) {
+		parse_error("'Execution' token", $line);
+	}
+
+	# get rid of the Execution keyword
+	$line =~ s/Execution//g;
+
+	# get rid of whitespace
+	$line =~ s/\s*//g;
+
+	# pick out the sections I need to execute (in order)
+	@exec = split /\,/, $line;
+
+	return \@exec;
+}
+
+# read in the dataflow setting up a real structure describing it
+sub match_dataflow
+{
+	my $finp = shift(@_);
+	my $line;
+	my %dataflow;
+	my (%inputs, %outputs);
+	my ($tmp, $tmp1, $tmp2);
+	my @tmp;
+	my ($input_name, $input_dim);
+	my ($output_name);
+	my %flow;
+	my ($left, $right, $ints);
+	my (@emitters, @acceptors, $emitter);
+	my ($acceptor, $section, $tmpints, @ints);
+
+	$line = getline($finp);
+	if (!match($line, "DataFlow")) {
+		parse_error("'DataFlow' token", $line);
+	}
+
+	# match the Input line
+	$line = getline($finp);
+	# get rid of the Input keyword
+	$line =~ s/Input//g;
+	# get rid of whitespace
+	$line =~ s/\s*//g;
+	@tmp = split /\,/, $line;
+	$dataflow{'input_order'} = [];
+	foreach $tmp (@tmp)
+	{
+		# insert the inputs into the input hash, this also represents
+		# the roots of the entire flow of information through the system 
+		($input_name, $input_dim) = split /\%/, $tmp;
+		$inputs{$input_name} = $input_dim;
+
+		# Also, store the inputs as we find them into an array so later
+		# in the config file, we can print them out in the order you need to
+		# supply the data.
+		push @{$dataflow{'input_order'}}, $input_name;
+	}
+	# record all of the inputs 
+	$dataflow{'inputs'} = \%inputs;
+
+	# match the Output line, if it exists
+	$line = getline($finp);
+	if ($line =~ m/Output/)
+	{
+		# get rid of the Output keyword
+		$line =~ s/Output//g;
+		# get rid of whitespace
+		$line =~ s/\s*//g;
+		@tmp = split /\,/, $line;
+		$dataflow{'output_order'} = [];
+		foreach $tmp (@tmp)
+		{
+			# record a boolean about the output channel which represents
+			# that the connection algorithm in the while loop below hasn't
+			# yet consumed this output channel.
+			$outputs{$tmp} = 0; 
+			# record the order of discovery for the output channels
+			push @{$dataflow{'output_order'}}, $tmp;
+		}
+		# record all of the outputs 
+		$dataflow{'outputs'} = \%outputs;
+
+		# get the next line in question....
+		$line = getline($finp);
+	}
+
+	# read all of the connections and build the connection data base.
+	# use the $line since it either saw an output directive or didn't.
+	while(!match($line, "End"))
+	{
+		# ok, get rid of all of the whitespace
+		$line =~ s/\s*//g;
+
+		if ($line =~ m/->/) {
+			# Connect the outputs of input channels or other sections to
+			# the inputs of other sections.
+
+			# now, determine the left and right hand sides
+			($left, $right) = split /->/, $line;
+	
+			# now, construct an array of the left and right
+			@emitters = split /,/, $left;
+			# acceptors have dimensional information with them...
+			@acceptors = split /,/, $right;
+	
+			# build the flow hash table keyed by the acceptors. When this is
+			# done, it should describe the graph of data flow from the inputs to
+			# the final sections
+			foreach $acceptor (@acceptors)
+			{
+				# get the dimensions of the emitter associated with each 
+				# acceptor
+				($section, $ints) = split /:/, $acceptor;
+				@ints = split /\//, $ints;
+				
+				# do a little error checking...
+				$tmp1 = scalar(@emitters);
+				$tmp2 = scalar(@ints);
+				if (scalar(@emitters) != scalar(@ints))
+				{
+					print "Error: $tmp1 emitters, but $tmp2 integrations " .
+						"for section '$section'!\n";
+					die "Aborting";
+				}
+	
+				# now, add them into the table keyed on the acceptor section 
+				# name order matters, so we push them onto the end queue-like...
+				# Note: wrtacc means the accepting sections are the keys in the
+				# hash table which is the value of $flow{'wrtacc'}
+				push @{$flow{'wrtacc'}{$section}{'emitters'}}, @emitters;
+				push @{$flow{'wrtacc'}{$section}{'ints'}}, @ints;
+	
+				# now, for the emitters, figure out who they emit symbols to:
+				for $emitter (@emitters)
+				{
+					# Note: wrtemi means the emitters are the keys in the deeper
+					# hash table which is the value of $flow{'wrtemi'}.
+					push @{$flow{'wrtemi'}{$emitter}{'acceptors'}}, $section;
+				}
+			}
+			
+		} 
+		elsif ($line =~ m/=>/) 
+		{
+			# XXX I hacked in how the output channels work. You can only
+			# have an output from a section, and ONE section may go to
+			# ONE output channel. Input channels can never go directly
+			# to an output channel. Yeah, I know it sucks, but this is an
+			# experimental feature and I want to write the minimum amount
+			# of code necessary.
+
+			# just record the section(no input channels allowed) which 
+			# output to this channel.
+
+			# sanity check for a common mistake, only A => B allowed.
+			if ($line =~ m/,/)
+			{
+				print "Only ONE section maybe output to ONE output channel\n";
+				die "this line is wrong:\n$line\n";
+			}
+
+			# section on the left, output channel on the right.
+			($left, $right) = split /=>/, $line;
+
+			if (exists($dataflow{'inputs'}{$left})) {
+				die "Input $left is not allowed to connect to an output!";
+			}
+
+			if (!exists($dataflow{'outputs'}{$right}))
+			{
+				die "Output channel $right was never declared!";
+			}
+
+			if (exists($flow{'out_chan'}{$left})) {
+				die "Section $left can't output to more than one output " .
+					"channel!";
+			}
+			if ($dataflow{'outputs'}{$right} == 1)
+			{
+				die "Output channel $right can only have ONE section as input";
+			}
+
+			$dataflow{'outputs'}{$right} = 1;
+
+			# a specific output channel has a section for an input....
+			$flow{'out_chan'}{$right} = $left;
+
+		}
+
+		$line = getline($finp);
+	}
+
+	$dataflow{'flow'} = \%flow;
+	
+	if (!match($line, "End")) {
+		parse_error("DataFlow 'End' token", $line);
+	}
+
+	return \%dataflow;
+}
+
+sub connect_emitters_to_acceptor
+{
+	my $href = shift(@_);
+	my %cortex = %{$href};
+	my %dataflow;
+	my (%flow, %connection);
+	my (%inputs, %indicies);
+	my ($acceptor, $emitter);
+
+	%dataflow = %{$cortex{'dataflow'}};
+	%inputs = %{$dataflow{'inputs'}};
+	%flow = %{$dataflow{'flow'}};
+
+	# for each emitter, make a hash table which I can use to construct an
+	# concrete connection(real indecies into the intergration arrays the C code
+	# will make) to an acceptor.
+	foreach $emitter (keys %{$flow{'wrtemi'}})
+	{
+		$connection{$emitter}{'conn'} = [];
+		$connection{$emitter}{'numconn'} = 0;
+	}
+
+	# initialize the running integration queue indicies for all of the acceptors
+	foreach $acceptor (keys %{$flow{'wrtacc'}})
+	{
+		$indicies{$acceptor} = 0;
+	}
+
+	# do the connection
+	foreach $acceptor (keys %{$flow{'wrtacc'}})
+	{
+		# this must be done in left to right on this array
+		foreach $emitter (@{$flow{'wrtacc'}{$acceptor}{'emitters'}})
+		{
+			# associate the emitter with a selected index the acceptor says
+			push @{$connection{$emitter}{'conn'}}, 
+				"$acceptor:$indicies{$acceptor}";
+			# keep track of how many connection this emitter writes into
+			$connection{$emitter}{'numconn'}++;
+
+			# increment this particular acceptor's accepting index in the
+			# array of integration queues. This ensures each connection of an
+			# emitter to an acceptor gets a unique index into the specific
+			# acceptor integration array.
+
+			$indicies{$acceptor}++;
+		}
+	}
+
+	# debugging output
+	#foreach $emitter (sort keys %connection)
+	#{
+	#	print "$emitter writes into $connection{$emitter}{'numconn'} slot(s) " .
+	#		"which are: '@{$connection{$emitter}{'conn'}}'\n";
+	#}
+
+	$href->{'connections'} = \%connection;
+}
+
+sub dump_load_to_stdout
+{
+	my $href = shift(@_);
+	my %cortex = %{$href};
+	my (%sections, %section, $secname);
+	my %dataflow;
+	my %flow;
+	my (%inputs, %outputs);
+	my ($input, $output, $acceptor, $i, $emitter);
+
+	print "Loaded Cortex Dump:\n";
+
+	%sections = %{$cortex{'sections'}};
+	
+	foreach $secname (sort keys %sections)
+	{
+		print "Section: $secname\n";
+		%section = %{$sections{$secname}};
+		
+		print "\tName: $section{'name'}, ";
+
+		print "x: $section{'x'}, ";
+		print "y: $section{'y'}, ";
+		print "rows: $section{'rows'}, ";
+		print "cols: $section{'cols'}, ";
+		print "iter: $section{'iter'}\n";
+	}
+
+	print "DataFlow:\n";
+	%dataflow = %{$cortex{'dataflow'}};
+	%inputs = %{$dataflow{'inputs'}};
+	if (exists($dataflow{'outputs'})) {
+		%outputs = %{$dataflow{'outputs'}};
+	}
+	%flow = %{$dataflow{'flow'}};
+
+	# use the ordering array to print out the inputs hash
+	print "\tInputs(ordered):\n";
+	foreach $input (@{$dataflow{'input_order'}})
+	{
+		print "\t\t$input % $inputs{$input}\n";
+	}
+
+	# optionally print out the outputs if they are available
+	print "\tOutputs(ordered):\n";
+	if (exists($dataflow{'output_order'})) {
+		foreach $output (@{$dataflow{'output_order'}})
+		{
+			print "\t\t$output\n";
+		}
+	} else {
+		print "\t\tN/A\n";
+	}
+
+	print "\tIntegration Graph:\n";
+
+	foreach $acceptor (sort keys %{$flow{'wrtacc'}})
+	{
+		print "\t\t$acceptor:";
+
+		# print out the integrations this acceptor wants for each emitter
+		for ($i = 0; $i < scalar(@{$flow{'wrtacc'}{$acceptor}{'ints'}}); $i++)
+		{
+			if ($i < scalar(@{$flow{'wrtacc'}{$acceptor}{'ints'}}) - 1) {
+				print "$flow{'wrtacc'}{$acceptor}{'ints'}[$i]/";
+			} else {
+				print "$flow{'wrtacc'}{$acceptor}{'ints'}[$i]";
+			}
+		}
+
+		print " <- @{$flow{'wrtacc'}{$acceptor}{'emitters'}}\n";
+	}
+
+	print "\tEmitter Graph:\n";
+	foreach $emitter (sort keys %{$flow{'wrtemi'}})
+	{
+		print "\t\t$emitter => @{$flow{'wrtemi'}{$emitter}{'acceptors'}}\n";
+	}
+}
+
+sub compute_propogations
+{
+	my $href = shift(@_);
+	my %cortex = %{$href};
+	my (%sections, $section, $secname);
+	my %dataflow;
+	my %flow;
+	my %prop;
+	my %inputs;
+
+	%sections = %{$cortex{'sections'}};
+	%dataflow = %{$cortex{'dataflow'}};
+	%inputs = %{$dataflow{'inputs'}};
+	%flow = %{$dataflow{'flow'}};
+
+	# default all sections to consuming
+	foreach $secname (sort keys %sections)
+	{
+		$section = $sections{$secname};
+		$section->{'propogating'} = 0;
+	}
+
+
+	# now, for each emitter section, mark it propogating
+	foreach $secname (sort keys %{$flow{'wrtemi'}})
+	{
+		$section = $sections{$secname};
+		$section->{'propogating'} = 1;
+	}
+}
+
+# any section that takes its input from another section(and not the input)
+# simply adds up the integrations and multiplies by 2 since each integration
+# of a previous section's results will be a 2 dimensional symbol representing
+# the location of said symbol on the map.
+# If the input is from a true input channel, then multiply the integrations
+# of that input by the dimension of the input.
+sub compute_dimensions
+{
+	my $href = shift(@_);
+	my %cortex = %{$href};
+	my %dataflow;
+	my %flow;
+	my %inputs;
+	my ($input, $acceptor, $i, $emitter, $dim, %dimension);
+
+	%dataflow = %{$cortex{'dataflow'}};
+	%inputs = %{$dataflow{'inputs'}};
+	%flow = %{$dataflow{'flow'}};
+
+	# figure out each acceptor's dimension based upon the emitters it is 
+	# accepting and the integrations of the inputs
+	foreach $acceptor (sort keys %{$flow{'wrtacc'}})
+	{
+		$dim = 0;
+		# cacluate the dimensions for this acceptor. There must be the
+		# same number of emitters as integrations and this should have been 
+		# determined eariler in the code.
+		for ($i = 0; $i < scalar(@{$flow{'wrtacc'}{$acceptor}{'emitters'}}); 
+				$i++)
+		{
+			# if the emitter I'm looking at is an input channel, then utilize
+			# the true input dimension, however, if it is just a normal section
+			# than assume the symbols will all have size two since I'm going
+			# to be encoding the 2d location of the resultant symbol instead
+			# of the true transform of the previous' section's input.
+			if (exists($inputs{$flow{'wrtacc'}{$acceptor}{'emitters'}[$i]})) {
+				# ok, an emitter to me is an input channel, so utilize that
+				# knowledge
+				$dim += $flow{'wrtacc'}{$acceptor}{'ints'}[$i] * 
+						$inputs{$flow{'wrtacc'}{$acceptor}{'emitters'}[$i]};
+						
+			} else {
+				# ok, assume 1 integration of any section that is not a true
+				# input channel is going to be two dimensions (aka the location
+				# of the result on the 2d hyperplane, not the dimension of the
+				# symbol embodied there)
+				$dim += $flow{'wrtacc'}{$acceptor}{'ints'}[$i] * 2;
+			}
+		}
+		
+		$dimension{$acceptor} = $dim;
+
+		# debugging output 
+		# print "$acceptor is $dim dimension(s)\n";
+	}
+
+	$href->{'dimension'} = \%dimension;
+}
+
+# give all of the sections and the input channels a unique serial number
+sub compute_serial_numbers
+{
+	my $href = shift(@_);
+	my %cortex = %{$href};
+	my (%dataflow, %flow, %inputs, $input, %outputs, $output);
+	my (%serialnum, $id);
+	my (%sections, $secname);
+
+	%sections = %{$cortex{'sections'}};
+	%dataflow = %{$cortex{'dataflow'}};
+	%inputs = %{$dataflow{'inputs'}};
+
+	if (exists($dataflow{'outputs'})) {
+		%outputs = %{$dataflow{'outputs'}};
+	}
+
+	$id = 0;
+
+	# give the section names an id number
+	foreach $secname (sort keys %sections)
+	{
+		$serialnum{$secname} = $id++;
+	}
+	
+	# give the inputs an id number
+	foreach $input (sort keys %inputs)
+	{
+		$serialnum{$input} = $id++;
+	}
+
+	# give the outputs an id number
+	if (exists($dataflow{'inputs'})) {
+		foreach $output (sort keys %outputs)
+		{
+			$serialnum{$output} = $id++;
+		}
+	}
+
+	$href->{'serialnum'} = \%serialnum;
+}
+
+sub dump_decorations_to_stdout
+{
+	my $href = shift(@_);
+	my %cortex = %{$href};
+	my (%dimension, %connection, $section);
+	my ($acceptor, %flow, %dataflow, $index);
+	my (%sections, $secref, $secname);
+	my (%serialnum, $snum);
+	my (%obser, %views, $node);
+	my (%outputs, $output);
+
+	%sections = %{$cortex{'sections'}};
+	%dataflow = %{$cortex{'dataflow'}};
+	%flow = %{$dataflow{'flow'}};
+	%dimension = %{$cortex{'dimension'}};
+	%connection = %{$cortex{'connections'}};
+	%serialnum = %{$cortex{'serialnum'}};
+	%obser = %{$cortex{'observations'}};
+	if (exists($dataflow{'outputs'})) {
+		%outputs = %{$dataflow{'outputs'}};
+	}
+
+	print "\n\tDecorations:\n";
+	print "\t------------\n\n";
+
+	print "\tSerial Numbers:\n";
+	foreach $section (sort keys %serialnum)
+	{
+		print "\t\t$serialnum{$section}:\t$section\n";
+	}
+
+	print "\tConnections:\n";
+	foreach $section (sort keys %connection)
+	{
+		print "\t\t$section writes into $connection{$section}{'numconn'} " .
+				"slot(s) which are: '@{$connection{$section}{'conn'}}'\n";
+	}
+
+	print "\tDimensions:\n";
+	foreach $section (sort keys %dimension)
+	{
+		print "\t\t$section is $dimension{$section} dimensional\n";
+	}
+
+	print "\tIntegration Queues(slot #, int #, slice #):\n";
+	foreach $acceptor (sort keys %{$flow{'wrtacc'}})
+	{
+		print "\t\t$acceptor: \n";
+		for ($index = 0; $index < scalar(@{$flow{'wrtacc'}{$acceptor}{'ints'}});
+			$index++)
+		{
+			print "\t\t\t$index | " .
+				"$flow{'wrtacc'}{$acceptor}{'ints'}[$index] | ";
+			print "$flow{'wrtacc'}{$acceptor}{'slices'}[$index]\n";
+		}
+	}
+
+	print "\tExecution Order:\n";
+	foreach $secname (@{$cortex{'execution'}})
+	{
+		print "\t\t$serialnum{$secname}\n";
+	}
+
+	print "\tPropogation mode:\n";
+	foreach $secname (sort keys %sections)
+	{
+		$secref = $sections{$secname};
+		
+		print "\t\t$secname: ";
+		if ($secref->{'propogating'} == 0) {
+			print "CONSUMING\n";
+		} else {
+			print "PROPOGATING\n";
+		}
+	}
+
+	print "\tObservations:\n";
+	foreach $secname (sort keys %obser)
+	{
+		print "\t\tReverse Lookup Node: $secname\n";
+		%views = %{$obser{$secname}};
+		foreach $node (keys %views)
+		{
+			print "\t\t\t$node\t\t$views{$node} observation(s)\n";
+		}
+	}
+
+	print "\tOutput Channel Table:\n";
+	if (exists($dataflow{'outputs'})) {
+		foreach $output (sort keys %outputs)
+		{	
+			$snum = $serialnum{$flow{'out_chan'}{$output}};
+			print 
+				"\t\t\t$flow{'out_chan'}{$output}($snum) => " .
+				"$output($serialnum{$output})\n";
+		}
+	}
+	else
+	{
+		print "\t\t\tN/A\n";
+	}
+}
+
+# This function performs a modified breadth first search through the emitter 
+# graph starting at the inputs computing the slice parameters for each 
+# integration queue for each slot of each section. This algorithm
+# absolutely does not do error checking to see if it has gotten into a
+# cycle or something, so don't write incorrect dataflows(things with cycles).
+# Only when a node's slots have all been calculated, does the algorithm add
+# that particular node to the queue for perusal. As the integration queue
+# properties flow through the system to the end, the maximum integration
+# backtraces are kept at each slot. Then when a node goes forward, its
+# maximum integration is used to compute the next node's slice information.
+sub compute_integration_queue_parameters
+{
+	my $href = shift(@_);
+	my %cortex = %{$href};
+	my %dataflow;
+	my %flow;
+	my %inputs;
+	my @todo;
+	my ($node, $input, $section, $acceptor, $index);
+	my %slot;
+	my ($con, %connection);
+	my ($int, $max, $ret, $i);
+	my @exec_order;
+
+	%dataflow = %{$cortex{'dataflow'}};
+	%inputs = %{$dataflow{'inputs'}};
+	%flow = %{$dataflow{'flow'}};
+	%connection = %{$cortex{'connections'}};
+
+	# ok, push the inputs onto the todo queue
+	@todo = ();
+	foreach $input (@{$dataflow{'input_order'}})
+	{
+		push @todo, $input;
+	}
+
+	# the slot represents if I've filled all of the slots during my breadth
+	# first search(via probing by the emitters) and if so, I can then add it
+	# to the todo list for processing
+	%slot = ();
+	foreach $section (keys %{$cortex{'sections'}})
+	{
+		if (exists $flow{'wrtacc'}{$section}{'emitters'})
+		{
+			$slot{$section} = scalar (@{$flow{'wrtacc'}{$section}{'emitters'}});
+		}
+	}
+
+	# now do data recursion with the todo queue and perform a breadth first
+	# search
+
+	# traverse the dataflow calculating the integration queue parameters for
+	# each section in each slot. Take special care in keeping track of the
+	# largest multiplication path for each section's sub trees.
+	while(scalar(@todo) != 0)
+	{
+		# if I'm processing something, either it is an input node and I can 
+		# handle its "best previous integration" specially, or it is a 
+		# normal node whose slots have been all filled in with "best
+		# previous integrations" available to that slot. If so, the 
+		# best integration for THIS node is then computed and written into the
+		# acceptor's slot info.
+		$node = shift @todo;
+
+		# fill in the slots of the acceptors for this node with the 
+		# required slicing information. All inputs are considered to have a 
+		# an infinite set of previous integrations which are all '1'.
+
+		if (exists($inputs{$node})) {
+
+			#print "BFS: $node (input channel)\n";
+
+			# for each acceptor that this input is connected to, setup the
+			# number of slices to be 1 for that slot.
+			foreach $con (@{$connection{$node}{'conn'}})
+			{
+				($acceptor, $index) = split /:/, $con;
+				#print "$acceptor : $index | " .
+					#"$flow{'wrtacc'}{$acceptor}{'ints'}[$index] | ";
+
+				$flow{'wrtacc'}{$acceptor}{'slices'}[$index] = 1;
+
+				#print "$flow{'wrtacc'}{$acceptor}{'slices'}[$index]\n";
+			}
+
+		} else {
+			#print "BFS: $node\n";
+			push @exec_order, $node;
+
+			# for each acceptor
+			foreach $con (@{$connection{$node}{'conn'}})
+			{
+				($acceptor, $index) = split /:/, $con;
+				#print "$acceptor : $index | " .
+					#"$flow{'wrtacc'}{$acceptor}{'ints'}[$index] | ";
+
+				# now, compute the best product out of my incomming slots
+				# and record it into the acceptor slot at $index
+				$max = 0;
+				for ($i = 0; $i < scalar(@{$flow{'wrtacc'}{$node}{'ints'}}); 
+					$i++)
+				{
+					$ret = $flow{'wrtacc'}{$node}{'ints'}[$i] * 
+							$flow{'wrtacc'}{$node}{'slices'}[$i];
+					if ($ret > $max)
+					{
+						$max = $ret;
+					}
+				}
+				$flow{'wrtacc'}{$acceptor}{'slices'}[$index] = $max;
+
+				#print "$flow{'wrtacc'}{$acceptor}{'slices'}[$index]\n";
+			}
+		}
+
+		# ------------------------------------------------------------------
+
+		# the rest of this while loop amuses itself by futzing with the
+		# BFS queue and slots hash in order to continue consuming the
+		# graph...
+
+		# decrement the "probe" value of the acceptors this node will
+		# push something too.
+		foreach $acceptor (@{$flow{'wrtemi'}{$node}{'acceptors'}})
+		{
+			if (exists $flow{'wrtacc'}{$acceptor}{'emitters'})
+			{
+				$slot{$acceptor}--;
+			}
+		}
+
+		# if any of the acceptors now have a zero in %slot, then add them
+		# to the TODO list. This says only add an acceptor when all of the
+		# node have filled all of its slots.
+		foreach $acceptor (keys %slot)
+		{
+			if ($slot{$acceptor} == 0)
+			{
+				push @todo, $acceptor;
+				# make sure to delete it so I only add what is left for me
+				# to do and I don't go into an infinite loop.
+				delete $slot{$acceptor};
+			}
+		}
+	}
+
+	# print out the exec order to see if I have it right...
+	#foreach $node (@exec_order)
+	#{
+		#print "$node\n";
+	#}
+
+	# hopefully, this is a correct ordering I've recorded....
+	$href->{'execution'} = \@exec_order;
+}
+
+# Each acceptor node gets put into the %obser has as a key, and the value 
+# associated with the key is another hash table explaining how many times
+# other nodes are encountered in the reverse lookup from the key node to
+# the viewable inputs. The inputs are also recorded as having been 
+# viewed a number of times as well.
+sub compute_observations
+{
+	my $href = shift(@_);
+	my %cortex = %{$href};
+	my (%sections, %section, $secname);
+	my %dataflow;
+	my %flow;
+	my %inputs;
+	my ($input, $acceptor, $i, $emitter);
+	my (%obser, %views);
+	my @todo;
+	my ($parent, $node);
+	my %visited;
+
+	# make some copies
+	%sections = %{$cortex{'sections'}};
+	%dataflow = %{$cortex{'dataflow'}};
+	%inputs = %{$dataflow{'inputs'}};
+	%flow = %{$dataflow{'flow'}};
+
+	# for each acceptor(notice not for inputs as well), 
+	# perform a reverse lookup back to the reachable inputs
+	foreach $acceptor (sort keys %{$flow{'wrtacc'}})
+	{
+		#print "\t\t$acceptor <- @{$flow{'wrtacc'}{$acceptor}{'emitters'}}\n";
+	
+		# we are starting a new reverse lookup, so clear out anything left in
+		# the BFS todo array
+		@todo = ();
+		# clear out the views table as well
+		%views = ();
+		# clear out the visited nodes for this acceptor's reachability tree
+		%visited = ();
+
+		# now, push the start of the reverse lookup into the todo list
+		# so we can start tracking backwards to the inputs. I also record
+		# the views of the initial node, which will end up being 1.
+		#print "BEGIN $acceptor\n";
+		push @todo, $acceptor;
+		# The user observed the root node with one mouse click....
+		$views{$acceptor}++;
+
+		# breadth first search all the way to the inputs, recording how many
+		# times I've visited the reachable nodes. This is counting the live
+		# output edges(participating in the subtree of the reverse lookup)
+		# from each emitter.
+		while(scalar(@todo) != 0)
+		{
+			$node = shift @todo;
+
+			# observe the parents of this particular section, inputs have no
+			# parents so don't try to look at their parents
+			if (!exists($inputs{$node}))
+			{
+				foreach $parent (@{$flow{'wrtacc'}{$node}{'emitters'}})
+				{
+					$views{$parent}++;
+				}
+			}
+			
+			# now, if this node ISN'T a true input, then push all of the 
+			# parents of this node into the todo list. I don't need to
+			# do reverse lookups on input names because they do not have
+			# parents.
+			if (!exists($inputs{$node}))
+			{
+				foreach $parent (@{$flow{'wrtacc'}{$node}{'emitters'}})
+				{
+					# only push this parent into the list if the parent
+					# is not already in the list otherwise I won't count the
+					# output edges of a node correctly
+					if (!exists($visited{$parent}))
+					{
+						$visited{$parent} = 1;
+						push @todo, $parent;
+					}
+				}
+			}
+		}
+		
+		# now, make a copy of the view to be the value for the obser table
+		%{$obser{$acceptor}} = %views;
+
+		#print "END $acceptor\n";
+	}
+
+	# add the observation table into the cortex
+	$href->{'observations'} = \%obser;
+}
+
+# this function generates a low level description of this cortex suitable for
+# loading into my C program.
+sub emit_lowlevel_desc
+{
+	my ($href, $outfile) = @_;
+	my %cortex = %{$href};
+	my %dataflow;
+	my %flow;
+	my (%inputs, $input);
+	my (%outputs, $output);
+	my %connection;
+	my ($secname, %sections, %section, $acceptor);
+	my %serialnum;
+	my ($tmp, $index, $slot);
+	my %dimension;
+	my $i;
+	my (%obser, %views, $node);
+	my ($out_chan);
+
+	%sections = %{$cortex{'sections'}};
+	%dataflow = %{$cortex{'dataflow'}};
+	%inputs = %{$dataflow{'inputs'}};
+	%flow = %{$dataflow{'flow'}};
+	%connection = %{$cortex{'connections'}}; %serialnum = %{$cortex{'serialnum'}}; %dimension = %{$cortex{'dimension'}};
+	%obser = %{$cortex{'observations'}};
+	if (exists($dataflow{'outputs'})) {
+		%outputs = %{$dataflow{'outputs'}};
+	}
+
+	open(OUT, ">$outfile") or die "Could not open outfile file! $!";
+
+	# -------------------------------------------------------------------------
+	# Informational header about what this file is.
+	# -------------------------------------------------------------------------
+
+	print OUT "# Lowlevel Cortex Description File Version 1.0\n";
+	print OUT "# Generated by Mojify: a Cortex translater written by psilord\n";
+	print OUT "# WARNING: Comments may NOT intermix on the same line as data\n";
+	print OUT "\n";
+
+	# -------------------------------------------------------------------------
+	# section output
+	# -------------------------------------------------------------------------
+
+	# print out the number of sections
+	print OUT "# Section Descriptions\n";
+	print OUT scalar(keys %sections) . "\n";
+
+	# print out each section
+	print OUT "# serialnumber name dimensions x y rows cols iter " .
+			"propogating(1)/consuming(0)\n";
+	foreach $secname (sort keys %sections)
+	{
+		%section = %{$sections{$secname}};
+		print OUT "$serialnum{$secname} $secname ";
+		print OUT "$dimension{$secname} ";
+		print OUT "$section{'x'} $section{'y'} ";
+		print OUT "$section{'rows'} $section{'cols'} ";
+		print OUT "$section{'iter'} $section{'propogating'}\n";
+	}
+	print OUT "\n";
+
+	# -------------------------------------------------------------------------
+	# input channel output
+	# -------------------------------------------------------------------------
+
+	print OUT "# input channel description\n";
+	print OUT "# number of parallel input channels\n";
+
+	print OUT scalar(keys %inputs) . "\n";
+
+	print OUT "# serial_number name dimension\n";
+	print OUT "# same order as declared in the .ctx file\n";
+	foreach $input (@{$dataflow{'input_order'}})
+	{
+		print OUT "$serialnum{$input} $input $inputs{$input}\n";
+	}
+	print OUT "\n";
+
+	# -------------------------------------------------------------------------
+	# Execution order
+	# -------------------------------------------------------------------------
+
+	print OUT "# number of sections to execute\n";
+	print OUT scalar(@{$cortex{'execution'}}) . "\n";
+	print OUT "# section serial numbers\n";
+	foreach $secname (@{$cortex{'execution'}})
+	{
+		print OUT "$serialnum{$secname}\n";
+	}
+	print OUT "\n";
+
+	# -------------------------------------------------------------------------
+	# Integration queue/slot parameter information
+	# -------------------------------------------------------------------------
+
+	print OUT "# integration queue/slot parameter information\n";
+
+	print OUT "# number of sections with integration queues to be setup\n";
+	print OUT scalar(keys %{$flow{'wrtacc'}}) . "\n\n";
+	
+	# print out each section, how many slots it needs and the slot info for
+	# each slot
+	foreach $acceptor (sort keys %{$flow{'wrtacc'}})
+	{
+		print OUT "# section serial number\n";
+		print OUT "$serialnum{$acceptor}\n";
+		print OUT "# number of valid slots\n";
+		# a section's slots are the number of integrations it has...
+		print OUT scalar(@{$flow{'wrtacc'}{$acceptor}{'ints'}}) . "\n";
+
+		print OUT "# slot info(slot number, integrations, slices)\n";
+		for ($index = 0; $index < scalar(@{$flow{'wrtacc'}{$acceptor}{'ints'}});
+			$index++)
+		{
+			print OUT "$index " .
+				"$flow{'wrtacc'}{$acceptor}{'ints'}[$index] " .
+				"$flow{'wrtacc'}{$acceptor}{'slices'}[$index]\n";
+		}
+		print OUT "\n";
+	}
+	
+	# -------------------------------------------------------------------------
+	# Connection lists (emitters/inputs to specific acceptor slots)
+	# -------------------------------------------------------------------------
+	
+	print OUT "# number of emitters/inputs (that connect to an acceptor)\n";
+	print OUT scalar(keys %connection) . "\n\n";
+
+	foreach $secname (sort keys %connection)
+	{
+		print OUT "# emitter\n";
+		print OUT "$serialnum{$secname}\n";
+		print OUT "# number of accepting slots to write into\n";
+		print OUT "$connection{$secname}{'numconn'}\n";
+		print OUT "# accepting section, slot number\n";
+		foreach $slot (@{$connection{$secname}{'conn'}})
+		{
+			($acceptor, $index) = split /:/, $slot;
+			print OUT "$serialnum{$acceptor} $index\n";
+		}
+		print OUT "\n";
+
+		#print "\t\t$secname writes into $connection{$secname}{'numconn'} " .
+		#		"slot(s) which are: '@{$connection{$secname}{'conn'}}'\n";
+	}
+
+	# -------------------------------------------------------------------------
+	# The Observation Table
+	# -------------------------------------------------------------------------
+	print OUT "# The observation table\n";
+	print OUT "# number of root nodes where an observation can start\n";
+	print OUT scalar(keys %obser). "\n";
+	print OUT "\n";
+	foreach $secname (sort keys %obser)
+	{
+		print OUT "# root node $secname\n";
+		print OUT "$serialnum{$secname}\n";
+		%views = %{$obser{$secname}};
+		print OUT "# total views for this node\n";
+		print OUT scalar(keys(%views)) . "\n";
+		print OUT "# observed node, number of observations\n";
+		foreach $node (keys %views)
+		{
+			print OUT "# $node\n";
+			print OUT "$serialnum{$node} $views{$node}\n";
+		}
+		print OUT "\n";
+	}
+
+	# -------------------------------------------------------------------------
+	# The Output Channels
+	# -------------------------------------------------------------------------
+	print OUT "# output channel description\n";
+	print OUT "# number of parallel output channels\n";
+
+	if (exists($dataflow{'outputs'})) {
+		print OUT scalar(keys %outputs) . "\n";
+		print OUT "# serial_number name\n";
+		print OUT "# same order as declared in the .ctx file\n";
+		foreach $output (@{$dataflow{'output_order'}})
+		{
+			print OUT "$serialnum{$output} $output\n";
+		}
+	}
+	else
+	{
+		print OUT "0\n";
+	}
+	print OUT "\n";
+	
+	# -------------------------------------------------------------------------
+	# The Section to Output Channel Table (if it exists)
+	# -------------------------------------------------------------------------
+	print OUT "# The output channel table\n";
+	print OUT "# number of sections which have an output channel\n";
+	print OUT scalar(keys %{$flow{'out_chan'}}) . "\n";
+
+	print OUT "# section_name output_channel\n";
+	foreach $out_chan (sort keys %{$flow{'out_chan'}})
+	{
+		print OUT "# $flow{'out_chan'}{$out_chan} $out_chan\n";
+		print OUT "$serialnum{$flow{'out_chan'}{$out_chan}} " .
+			"$serialnum{$out_chan}\n";
+	}
+	print OUT "\n";
+
+	print OUT "# End translation\n";
+
+	close(OUT);
+}
+
+sub member
+{
+	my ($item, $aref) = @_;
+	my @array = @{$aref};
+	my $tmp;
+
+	foreach $tmp (@array)
+	{
+		if ($item =~ m/$tmp/)
+		{
+			return 1;
+		}
+	}
+
+	return 0;
+}

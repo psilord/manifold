@@ -1,0 +1,38 @@
+Cortex
+	Sections
+		A
+		Location: 0, 0
+		Size: 128,128 
+		Iter: 200000
+		
+		B
+		Location: 128, 0
+		Size: 128,128 
+		Iter: 200000
+
+		C
+		Location: 64, 128
+		Size: 128,128 
+		Iter: 200000
+
+	End
+
+	DataFlow
+
+		Input CH_A%16, CH_B%16, CH_C%16, CH_D%16, CH_E%16, CH_F%16, CH_G%16, CH_H%16, CH_I%16, CH_J%16, CH_K%16, CH_L%16, CH_M%16, CH_N%16, CH_O%16, CH_P%16
+
+		Output OUT_A
+
+		CH_A, CH_B, CH_C, CH_D, CH_E, CH_F, CH_G, CH_H -> A:1/1/1/1/1/1/1/1
+		CH_I, CH_J, CH_K, CH_L, CH_M, CH_N, CH_O, CH_P -> B:1/1/1/1/1/1/1/1
+
+		A, B -> C:1/1
+
+		C => OUT_A
+	End
+End
+
+
+
+
+

@@ -1,0 +1,189 @@
+# section description
+# number of sections
+9
+# serialnumber name dimensions x y rows cols iter propogating(1)/consuming(0)
+0 A 10 0 0 80 80 8000 1
+1 B 10 0 0 80 80 8000 1
+2 C 10 0 0 80 80 8000 1
+3 D 10 0 0 80 80 8000 1
+4 E 10 0 0 80 80 8000 1
+5 F 10 0 0 80 80 8000 1
+6 G 10 0 0 80 80 8000 1
+7 H 10 0 0 80 80 8000 1
+8 I 10 0 0 80 80 8000 0
+
+# inputs
+2
+# serialnumber name dimensions
+# order as declared in the .ctx file
+9 CH_A 1
+10 CH_B 1
+
+# execution order
+# number of sections in execution order
+9
+# serial numbers of the sections to be executed in a certain order
+0
+1
+2
+3
+4
+5
+6
+7
+8
+
+# integration queue/slot parameter information
+
+# number of sections with integration queues
+9
+
+# section serial number
+0
+# number of valid slots
+1
+# slot info(slot number, integrations, slices):
+0 2 1
+
+# section serial number
+1
+# number of valid slots
+1
+# slot info(slot number, integrations, slices):
+0 3 1
+
+# section serial number
+2
+# number of valid slots
+2
+# slot info(slot number, integrations, slices):
+0 3 2
+1 3 3
+
+# section serial number
+3
+# number of valid slots
+1
+# slot info(slot number, integrations, slices):
+0 1 9
+
+# section serial number
+4
+# number of valid slots
+1
+# slot info(slot number, integrations, slices):
+0 2 9
+
+# section serial number
+5
+# number of valid slots
+2
+# slot info(slot number, integrations, slices):
+0 2 9
+1 2 18 
+
+# section serial number
+6
+# number of valid slots
+2
+# slot info(slot number, integrations, slices):
+0 1 36
+1 1 18 
+
+# section serial number
+7
+# number of valid slots
+2
+# slot info(slot number, integrations, slices):
+0 1 9
+1 1 36
+
+# section serial number
+8
+# number of valid slots
+2
+# slot info(slot number, integrations, slices):
+0 2 72
+1 2 36
+
+# connection list (emitters/inputs to specific acceptor slots)
+
+# number of emitter (that connect to a slot in an acceptor)
+10
+
+# emitter
+0 
+# number of accepting slots to write into
+1
+# accepting section, slot number
+2 0
+
+# emitter
+1 
+# number of accepting slots to write into
+1
+# accepting section, slot number
+2 1
+
+# emitter
+2 
+# number of accepting slots to write into
+2
+# accepting section, slot number
+4 0
+3 0
+
+# emitter
+9 
+# number of accepting slots to write into
+1
+# accepting section, slot number
+0 0
+
+# emitter
+10 
+# number of accepting slots to write into
+1
+# accepting section, slot number
+1 0
+
+# emitter
+3 
+# number of accepting slots to write into
+2
+# accepting section, slot number
+5 0
+7 0
+
+# emitter
+4 
+# number of accepting slots to write into
+2
+# accepting section, slot number
+5 1
+6 1
+
+# emitter
+5 
+# number of accepting slots to write into
+2
+# accepting section, slot number
+7 1
+6 0
+
+# emitter
+6 
+# number of accepting slots to write into
+1
+# accepting section, slot number
+8 1
+
+# emitter
+7 
+# number of accepting slots to write into
+1
+# accepting section, slot number
+8 0
+
+
+

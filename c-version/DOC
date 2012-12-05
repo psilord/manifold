@@ -1,0 +1,382 @@
+Description of the functionalities of Pete's SOM codes.
+
+Core Idea
+---------
+
+The basic unit of feature extraction is the SOM. While SOMs are
+generalizable to map X dimensional input points to an N dimensional
+manifold where N <= X (though usually N << X), I implemented X >=1
+and N = 2. I did this because N = 2 is easy to visualize and for a
+human to understand topologically. The code could be generalized to
+other embedding manifolds, but meh, I hadn't a need for it.
+
+The basic SOM algorithm is:
+
+1. Make an N dimensional array where each element is an X dimensional point.
+2. Initialize the X dimensional points to be in quadrant I [0.0 to 1.0]
+3. Get input point P [also in quadrant I] and find the best matching
+    unit U minimizing a metric function.
+4. Create a neighborhood D around U with a gaussian centered at P
+    whose height is one at U and zero at the edges of D.
+5. For each point NP in D, find the parametric line from NP to P where
+    t = 0 at NP and t = 1 at P. 
+6. Multiplying t, which is always equal to one, by the value of the gaussian 
+    at NP, move each NP towards P. [Aside: The NP which is U becomes P.]
+7. Repeat, shrink D linearly for each new P until it is zero. When zero,
+    algorithm terminates.
+
+In the case of overfitted neurons I take the centroid on the manifold
+as the output point on the manifold.
+
+A useful property of SOMs is that features near in the high dimensional
+space become near in the lower dimensional space, but there is no
+guarantee that this will always be the case in the classification
+manifold.
+
+Motivation: Scalability
+-----------------------
+
+I implemented the above and thought it was pretty cool while
+classifying all manner of things. It was originally intended for sign
+language recognition with 3D sensors on the arms/hands/fingers. That
+didn't get made due to cost. As I started to do larger and larger
+SOMs on other topics I ran into problems.
+
+For example, I wanted to categorize raw images in color space, if each
+image was 1024 x 1024 and RGBA, then each image takes 1024 * 1024 *
+4 bytes of RAM which is 4 Megs per image vector. [Sure I could shrink
+it in this case, but that's not the point.]
+
+Then if I wanted a 2048 x 2048 SOM (remember each element is a 4
+Meg vector), then I'd need a total of 16 TERABYTES of memory to
+represent that SOM. Also, the output of the SOM is (traditionally)
+an X dimensional point.
+
+So, I thought about how to cut the SOM into pieces so I could do the
+computation on many computers instead. 16 Terabytes of RAM would be
+~85 machines with 192GB of RAM apiece. It is easy to get that...
+
+Attempt: Subspace SOMs
+----------------------
+
+There would be two ways to cut SOMs across machines.
+
+The first way is to keep the memory and algorithms of the SOM
+functionally contiguous and use communication protocols to implement
+a single classificaton space and manifold across machines. I don't
+like this since if one machine fails the entire SOM computation
+fails and there are strong constraints about consistency and timing
+that must be honored. This is a very static idea of how to do the
+parallelization and with machines of differring speeds, everyone runs
+at the slowest speed.
+
+The second way is to make a certain insight (unproven):
+
+By construction of a SOM, there is ALWAYS a bijective function
+between a point on the N manifold and an X dimensional point. Now,
+if the SOM converges, then there exists (unproven in SOM theory) a
+bijective function between a point on the manifold and a recognized
+input feature. I identify the centers of the clusters (via the quality
+maps) as certain bijective functions (taking the centroid if neurons
+are overfitted, etc) that represent the feature in question.
+
+Now, you cut the input points up into S subspaces, and have S
+SOMs learning each portion of the subspace--therby only learning
+the portion of a feature which exists in that subspace. Using the
+(converged) N-dimensional matching point on each manifold as the
+bijective symbolic representation of the X dimensional point behind
+it, you can now consider this as a brand new Y dimensional input space
+and use another SOM to learn all of the outputs of the previous SOMs.
+
+mathematically:
+
+I is a point in 16 dimensional space
+I = <a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p>
+
+We cut it into K:K>=1 subspaces (suppose K=8):
+
+I0 = <a, b, c, d, e, f, g, h>
+I1 = <i, j, k, l, m, n, o, p>
+
+Then we pass the 8 dim input vectors through two SOMS to get their 2d output
+points:
+
+I0 -> S0 : O0
+I1 -> S1 : O1
+
+Now, we treat the 2 2d manifold outputs as coordinates in a 4D
+hypersurface. This is the "abstraction" procedure:
+
+H = <I0, I1>
+expands to:
+H = <XS0, YS0, XS1, YS1>
+
+Now, we learn THAT point in another SOM:
+
+H -> S2 : O2
+
+If the H points are statistically stable, then (unproven) we'll find O2
+points that are bijectively stable too.
+
+Ultimately, we built a compositional chain of SOMs transforming
+high dimensional features to a lower dimensional manifold and then
+to a possibly lower dimensional manifold (possibly ad infinitum).
+This whole composition is (unproven) functionally invertible.
+There are biological analogs to this design in the mammilian visual
+cortex of primates. [XXX: note intriguing ideas of a SOM calculus
+which incrementaly moves X dimensional data to a X-1 manifold, and then
+the X-1 manifold to X-2 manifold, down to a manifold of dimension 1.
+This MAY resemble the mechanics of the Diffeomorphic Dimensionality
+Reduction idea.]
+
+This is useful to us for multiple reasons:
+
+1. You only need a lot of memory for the initial input feature
+    subpaces. All later subspaces only use much lower dimensional
+    input points as their inputs allowing for larger manifolds and
+    more discrimination of input feature relations.  We can split
+    the classifying space across as many computers as we want.
+
+2. If each SOM is running as an agent on a machine, then it will only
+    classify (complete) inputs and produce outputs as fast as it gets
+    them. This means we allow a partial ordering of packets to and form
+    the SOMs and relax some ordering constraints. However, the ordering
+    of the dataflow through the SOMs itself still must be honored
+    (at this time). I have some understanding of what to do in the
+    incomplete input scenario, but I hadn't implemented it. [Basically,
+    perform the winner take all and learning interpolation only in
+    the subspaces that are available in the input--but still producing
+    the full dimensionality manifold output.]
+
+3. Dramatically increased I/O bandwidth of the inputs/outputs
+    (known as symbols). Each agent in the computation can not only receive
+    inputs from other agents earlier in the dataflow, but also from
+    the world around the computer and all inputs can be integrated
+    together during a SOM learning session. This allows for very
+    high bandwidth of parallel I/O and the whole participating
+    set of computers can "perceive" or "modify" the world in a
+    larger coherent spatiotemporal context.
+
+At this point, each SOM is almost a reified function. They may have
+multiple inputs of arbitrary dimensionality and a single output point
+of two dimensions. Combining multiple SOM together form a "cortex" which
+means that the output manifold is larger than 2D.
+
+The "mojify" program in my codes accepts a dataflow-like language
+which describes how inputs, SOMs, outputs, and their connections are
+connected together.  It compiles the language down to another concrete
+representation language which the ./de program loads and executes.
+
+An example of this language which defines one SOM which takes 4 8 dimensional
+dimensional inputw, defines the manifold size, and iteration period, looks
+like this:
+
+Cortex
+    Sections
+        # Name of a SOM, where it is located, and how long it learns.
+        SOM_0
+        Location: 0,0
+        Size: 128,128
+        Iter: 10000
+    End
+
+    DataFlow
+        # Each input channel and the dimensionality on that channel
+        Input CH_A%8, CH_B%8, CH_C%8, CH_D%8
+
+        # Symbolic names of all output channels from the cortex
+        Output OUT_A
+
+        # Abstract the inputs left to right, then learn it.
+        # I haven't talked about it, but expect 1 time steps worth of
+        # information from each channel.
+        CH_A, CH_B, CH_C, CH_D -> SOM_0:1/1/1/1
+
+        # We state that SOM_0's output should be considered OUT_A from this
+        # cortex.
+        SOM_0 => OUT_A
+    End
+End
+
+Here is an example which uses three SOMs to perform (theoretically) the
+same computation above but splitting the subspaces into different SOMs
+(which could theoretically run on different computers):
+
+Cortex
+    Sections
+        # Name of a SOM, where it is located, and how long it learns.
+        SOM_0
+        Location: 0,0
+        Size: 128,128
+        Iter: 10000
+
+        SOM_1
+        Location: 128,0
+        Size: 128,128
+        Iter: 10000
+
+        SOM_2
+        Location: 256,0
+        Size: 128,128
+        Iter: 10000
+
+    End
+
+    DataFlow
+        # Each input channel and the dimensionality on that channel
+        Input CH_A%8, CH_B%8, CH_C%8, CH_D%8
+
+        # Symbolic names of all output channels from the cortex
+        Output OUT_A OUT_B OUT_C
+
+        CH_A, CH_B -> SOM_0:1/1
+        CH_B, CH_C -> SOM_1:1/1
+
+        # Notice we have SOMs on the left now, we assume their output is 2D
+        SOM_0, SOM_1 -> SOM_2:1/1
+
+        SOM_2 => OUT_A
+    End
+End
+
+
+Motivation: What the hell is the system doing? Reverse Lookup
+-------------------------------------------------------------
+
+As I was debugging this stuff, it got increasingly harder and harder
+to find out if after several hours the SOM learned what I expected
+it to learn. I wished I could just click on the surface of the manifold
+and have it tell me what you wold have to give as input in order for that
+neuron on the manifold to be considered the best matching unit.
+
+
+Attempt: Implemented reverse lookup
+-----------------------------------
+
+In the case of a single SOM. You just look up the point on the surface you
+clicked and you get the correct high dimensional point.
+
+In the case of a tree dataflow of SOMs, you "unabstract" the higher
+dimensional point located at the vector into its constituent pieces,
+then go to the SOMs which produced those pieces and continue the same
+algorithm. At the root of the inputs, you have the final inputs you
+need, that if you invert the process, will select the original point
+you clicked on.
+
+In the case of a Diamond Dag of SOMs, if at any point we find a
+"conflict" of multiple SOMs contributing to a single value, we take
+centroid of the contributing inputs, and continue walking backwards
+in the dataflow. There are some issues with this heuristic if the
+clusters ever become nonconvex.
+
+This algorithm is pretty straightforward, until you get to the time
+modeling in the codes. If you are integrating time in the system,
+then you'll get back a whole sequence of symbols which must be input
+in order to match the neuron you specified. The implementation has
+some details and is a little complex.
+
+Mathematically, unabstraction is (using the 3 SOM cortex above):
+
+Input: I, a 2D point on manifold SOM_2
+
+1. Get the higher dimensional point in the space from the manifold:
+    
+    I : P <a, b, c, d>
+
+2. By construction, we know how to unabstract it:
+
+unabstract(P) 
+    = <SOM_0, SOM1> 
+    = <<XS0, YS0>, <XS1, YS1>>
+
+So we know that <XS0, YS0> is a manifold point on SOM_0 and
+<XS1, YS1> is a manifold point on SOM_1.
+
+Then, we continue the process recursively to find the input vector.
+
+If two or more input point subspaces happen to come from the same
+input SOM _at the same time step going backwards in time_, we take the
+centroid on the manifold before looking up the higher dimensional point
+and continue the operation. I have not yet implemented the visualizing
+of anything other than the first time step backwards in time.
+
+It turns out this was pretty useful and very successful. I was going
+to use graphviz to do the layout for me, but meh, never got to it.
+
+Motivation: Continuous Learning
+-------------------------------
+
+These codes are partially implemented.
+
+At its core, a SOM learns the attractors of a probability density
+function where the attractors are the actual features themselves. The
+amount of space devoted to each feature is related to the probability
+of that feature in the input. More area for higher probability.
+
+I found that I wanted to SOM to relearn new information, but only if
+the new information was significant as spoosed to error correcting
+a mistake.
+
+Relearning and error correction are intertwined deeply like yin and
+yang. :)
+
+The learning function is (on the traditional SOM) linear. You start at a
+large neighborhood and linearly slide towards a zero sized neighborhood.
+I wanted plasticity, which in this case means, sliding the zero sized
+neighborhood back up to non-zero sized so neurons can be effected again
+by the inputs. Now, how do I know when to become plastic, and how much
+plasticity I need?
+
+Attempt: Plasticity as a response to coherent error
+---------------------------------------------------
+
+Plasticity in this context has the effect of scavenging neurons
+from nearby clusters to the best matching unit in order to grow new
+clusters to represent the new information-remember there are only a
+finite number of neurons. This means that you can eventually "forget"
+previously learned features. An interesting side effect is that it
+also means that the manifold can represent ANY feature in the pattern
+space, but only a proper subset of all features. How big is that
+subset given a manifold size? I don't know, but it does imply some
+highly interesting correspondance between mathematical analysis and
+information theory (in essance, how much manifold should dedicated to
+a chunk of information). Hint: If you think a 0D point is good enough,
+think of the effect of noise around that point as a transformation of the
+noise around the feature in the pattern space!
+
+So, what this means is that you have to determine that when you start
+seeing a lot of error, is the error random, or coherent? Random meaning
+if you are not in a cluster, did you pick a random boundary neuron
+between clusters out of the set of them, or are you consistently
+picking certain boundary neurons. This makes an assumption that
+boundary neurons are not totally random which has empirical evidence
+(even in the context of certain kinds of noise, but that makes the
+problem much harder).
+
+Oddly, you can use another SOM (Z) to find this out. If inputs to Z
+(as it goes through its learning phase) form well-defined (ignoring
+what that means for now) clusters, but match only into cluster boundary
+regions in the original SOM (figured out by statistical methods), then
+you know you can make plastic the original SOM to relearn statistically
+significant information (forgetting old information), and randomize Z
+once the learning algorithm refinishes to start the process anew. At
+this point, there is some signal processing math one can do to figure
+out how fast of a probibalistic movement (periodical or not) the system
+is able to discern from one set of features to different set of features.
+
+Motivation: Time & DFAs
+-----------------------
+
+Attempt: Integration Queues
+---------------------------
+
+Motivation: Noise and its Effects
+---------------------------------
+
+Attempt: Clean up the manifold
+------------------------------
+
+Observation: Manifolds Over Arbitrary Mathematical Objects
+----------------------------------------------------------
+
+

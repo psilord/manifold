@@ -1,0 +1,228 @@
+There is a lot to explain, I'm not explaining it all in the first email,
+only how to build it, run it, and initially understand the output.
+I will not describe how I deal with time in this explanation.
+
+To compile, type make:
+
+You may need to apt-get install opengl, glut, glu, and SDL. Probably
+some other stuff too, just keep apt-getting crap until it compiles.
+
+After it builds, run:
+
+./de vision2.ctx
+
+This takes as input 256 (I think) 16x16 pixels images where 0 is black,
+1 is white, and you may have a greyscale in between (but none of the
+images do).
+
+When the program runs, it starts learning images as fast as it can,
+but shows you the state of the classification space and some other
+information at a 1 Hz rate on the screen.
+
+If I number the glyph images left to right as 1, 2, 3, (4), they mean this:
+
+1 is the uncorrupted image being considered in this frame of output.
+2 is the corrupted image actually being learned, in this example the corruption
+is zero mean, and also there is zero corruption. :)
+3 is the glyph you get when, after having found the best matching unit, you
+reverse lookup what the input WOULD beed to be in order to produce that best
+matching unit.
+(4) isn't there, until you click on the square. When you do, you get the
+image you WOULD need to input into the SOM in order to match the pixel
+selected.
+
+Now, the square on the lower left is the classification manifold. It
+is a 2D array in which each pixel represents a 256 dimensional vector
+that is an entire image. This is the traditional SOM. Initially,
+you see a pile of colors and then it goes white. That is because I'm
+only graphing the first three dimensions of the image as a color,
+and all of them are white in the first three dimensions.
+
+This isn't a useful display, unless you hit the s key. :) Then it becomes
+the SOM quality map (and since it is a convolution, is much slower to compute,
+so initially it is off). This quality map shows you the separated clusters
+in the lower 2D manifold. The a key goes back to the initial visualization.
+
+The square with the dot in the middle represents where the best matching unit
+was (but not the neighborhood size, I had something in there for that, but it
+isn't as visually interesting as you might imagine). It is yellow when the
+som is learning, and green when it has "converged".
+
+You can reverse lookup any pixel at any time. I wanted reverse lookup
+since it A) helped debugging a lot B) made it so I can automatically
+annotate a manifold for visual inspection, and C) make it so if I
+had completely independent classifiers, they could communicate to
+each other via a means I won't describe in this document since it is
+too long.
+
+Ok, let's move to a more non-traditional SOM:
+
+./de vision.ctx
+
+This command will have the same imputs, but the classification space
+is very different. All of the visualized squares in this new layout
+are in and of themselves soms.
+
+Each image in the bottom row represents a SINGLE row in the image going from
+top down of the image. If you click on one of those, you'll only see the
+available dimensions of data and red for the missing data in the image.
+
+Now, the som in the second row all the way on the left, represents
+the first _two_ rows of the image. The way it does this, is through a
+dimensional reduction algorithm I created where the actual 2d manifold
+location of the BMU on the first SOM and the second SOM (both coherent
+in time since they were for the same image at the same time step)
+on the first row are "abstracted"
+
+    Definition of "to abstract":
+        Vector 1: <x0 y0>
+        Vector 2: <x1 y1>
+        1 abstract 2: <x0 y0 x1 y1>
+
+And then this 4 dimensional vector is learned by the first som on the left of
+the second row. Each som across the second row learns in this fashion two
+rows from the soms just beneath it (basically).
+
+In essance, the 4 dimensional vector stands in place of the true 32
+dimensional vector represented by the first two rows, where each row
+is 16 dimensions.
+
+Each SOM row going up the visualization performs the same behavior with the row
+below it until you get to the final SOM at the top.
+
+When all SOMS have finished converging, hit s, and then find a cluster in the
+top SOM and click on the center of it. If you want, you can click on SOMs
+which haven't even started converging and you'll get SOMETHING. [It turns out
+there is a pile of interesting here, since you can never escape the unit
+dimensional space, so you can APPEAR to have coherence in small doses. That's
+an interesting topic for later.]
+
+What happens is you take the vector you find in the SOM, "unabstract"
+it, which is the inverse of the abstraction process, thereby yielding
+multiple vectors, and look up those location on their respective
+SOMs which contributed to the abstraction previously in the dataflow,
+and continue the operation until you get to the bottom soms, in which
+case you find the logical inputs you'd need to (if you reversed the
+entire data flow) match the best matching unit at the top SOM.
+
+You will be shocked to see it work. :) If you carefully interpolate a
+line with mouse clicks between two cluster centers (in the first row,
+I won't talk about what this means for other rows in this document)
+near each other separated by a black region, then you'll see the
+minimal changes necessary to move the original input to the second
+input. [This is critical, because it implies that the pattern space
+is continuous, which since I was caring about reality itself, is for
+the temporal and spatial frequencies of resolution I cared about.)
+
+There is some physiological evidence in the visual cortex of mammilian brains
+that this type of "learning the best matching unit of other manifolds" is 
+actually performed.
+
+There is a whole pile of questions and research concerning the
+splitting of the original 256 dimensional space represented in
+vision2.ctx into the subspaces represented in vision.ctx. When noise
+is mixed into the situation, there is some funny business which I
+hadn't solved (but that's just because I didn't know the math, not
+because I don't think it isn't solvable).
+
+The stuff I'll leave for future thought (which I've thought about
+for a decade so we can have good discussions) are things such as:
+
+"What happens if I abstract the manifold point at time-1 OF MYSELF
+and at time-0 and learn _that_ for time+1? What about time-{1,2,3,4..N}
+and time-0?"
+
+"What happens if I build a graph dataflow instead of a tree like in
+vision.ctx?  What does this do to reverse lookup? [this is implemented,
+actually]"
+
+"How does reverse lookup change when I can reverse lookup for infinite time?
+And how meaningful is the reverse lookup?"
+
+The .ctx files are effectively a graph dependency language which dictates
+dimensionality of the inputs in addition to how much time is being
+integrated by any particular SOM. The 'mojify' compiler takes that
+and compiles it to a low level ascii text file which represents detail
+and grounded data structures that ./de reads.
+
+
+
+Now, the inputs to the SOMs are relatively abstracted (in the tradition
+sense of the word) in the sense that you design a method to convert
+whatever input you have into a point in N dimensional space (and back
+again), and then that's the means the input is transduced into the
+form the program can use.
+
+This means you can only learn bijected transforms of the pattern
+space to the classification space. I argue it is only these functions
+and their inverses that are worth anything. :) For example, a human
+brain has multiple modalities of inputs, which are all converted to
+pulse trains with voltages and frequencies in a VERY specific range
+from which they don't/can't deviate, and the inverse is true, see:
+the motor cortex being the only output form of the brain (if I recall).
+
+The power of this is obvious but pretty unexplored in my codes,
+it allows for mixing of input modalities such as:
+
+Suppose you want to learn labeled images: 
+    <"Pete" pete-1.png>
+    <"Pete" pete-2.png>
+    <"Ugur" ugur-1.png>
+    <"Ugur" ugur-2.png>
+    <"Ugur" ugur-3.png>
+    <"Robert" robert-1.png>
+
+You can build a (whatever the antonym to descritization is) like this
+for the name dimensions:
+
+Pete : 0
+Ugur : .5
+Robert : 1
+
+[kind of like a probability mass distribution function]
+
+and the png can just be the normalized rgb pixels from each row
+concatenated together, so:
+
+    <"Pete" pete-1.png>
+    becomes
+    <0 .1 .3 .1 0 .4 .2 ...>
+
+and so on, then THOSE are the vectors you learn in the SOM.
+
+So, you "tag" each image with who it is form and the input method knows how
+to undo this tag.
+
+The beauty of this, is that since you can easily cut the classification
+space into subspaces, you can build a system in which an Image som
+learns ONLY the image dimensions, and then the 2d output is abstracted
+with the name dimension (if the same input vector) and learned by
+a second som. So, the second som builds clusters which associates
+all pictures of an individual to the individual (well, it tries to
+at least, soms in more than one dimension aren't proven to converge
+(or they might be, but I haven't read the paper yet and it wasn't
+solved when I was dealing with this stuff)). [And here is the kernel
+of the idea for how to build a programming language with 2d vector fields
+representing subspaced of the pattern space.] There is some notion of a
+"query language" shoved into here, but I hadn't resolved it yet.]
+
+There was always more shit to solve with the math this code was
+implementing, you know how it goes.
+
+But, you can start to see why I started to ultimately move away from
+SOMs because in essance, I wanted to find a continuous means for
+representing ALL the clusters (whatever they may be) at the same
+time. I had chosen strange attractors since they can be scale-free
+and represent _at least_ the countable number of clusters (only a
+finite representation space) in ANY converged SOM, and can handle noise
+(recent research shows that the attractor represents invarient random
+probability measures in this case). Ahem, it was also the avenue by
+which I wanted to prove that a strange attractor embedded in a manifold
+that exhibits contraction (to keep the attractor stable) was equivalent
+to a turing machine--moving between attractor configurations instead
+of storing data on a tape. BUUUUTTTT.... my math skills were too poor,
+so I have been working on that of late. Frankly, I'm at the limit of
+my math ability concerning this stuff.
+
+Meh, enough explanation. later.
+

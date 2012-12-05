@@ -1,0 +1,54 @@
+Cortex
+	Sections
+		A
+		Location: 0, 0
+		Size: 10, 10
+		Iter: 8000
+
+		B
+		Location: 0,20
+		Size: 10,10
+		Iter: 8000
+
+		C
+		Location: 0,40
+		Size: 10,10
+		Iter: 80000
+
+		D 
+		Location: 20,40
+		Size: 10,10
+		Iter: 80000
+
+		E 
+		Location: 10,60
+		Size: 10,10
+		Iter: 80000
+
+	End
+
+	# This part describes how the section are connected and integrating with
+	# respect to themselves.
+	DataFlow
+
+		# A sections who do not put their data somewhere are considered 
+		# consumers of the data, everyone else is a propogator
+
+		# inputs, in parallel, with input dimensions specified
+		# NOTE: Also, this must be the FIRST line in the DataFlow section...
+		# In addition, input channels better not have the same name as any
+		# section.
+		# In addition, the left right ordering of the inputs are significant
+		# because you must supply the inputs into the cortex in the same order.
+		Input CH_A%1
+
+		CH_A -> A:1
+
+		A -> B:1
+		B -> C:1, D:1
+		CH_A, C, D, A -> E:1/1/1/1
+
+		End
+End
+
+

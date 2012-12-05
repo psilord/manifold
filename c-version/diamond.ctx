@@ -1,0 +1,46 @@
+Cortex
+	Sections
+		A
+		Location: 64, 0
+		Size: 50, 50
+		Iter: 20000
+
+		B
+		Location: 0, 128 
+		Size: 50, 50
+		Iter: 200000
+
+		C
+		Location: 128, 128 
+		Size: 50, 50
+		Iter: 200000
+
+		D
+		Location: 64, 256
+		Size: 50, 50
+		Iter: 2000000
+
+		#E
+		#Location: 64, 310
+		#Size: 50, 50
+		#Iter: 440000
+
+		#F
+		#Location: 768, 128
+		#Size: 256, 256
+		#Iter: 650000
+
+	End
+
+	DataFlow
+
+		Input CH_A%1
+
+		CH_A -> A:1
+		A -> B:10, C:10
+		B, C -> D:3/3
+		
+		End
+End
+
+

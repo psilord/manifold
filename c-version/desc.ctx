@@ -1,0 +1,104 @@
+# This file is translated by perl into a low level C configuration file.
+# The perl script also figures out every thing, like the dimension of each
+# section as it relates to the location in the integration graph, and also
+# what the parameters are in the integration queues for each section.
+
+# The compiler for this language is VERY DUMB. So this is the canonical
+# representation of one of these files. Line continuity is important, this
+# means most of the keywords need their oen line, except for Execution.
+
+Cortex
+
+	# each section's dimensional size will be determined after the data flow
+	# part of this file is processed
+
+	Sections
+		# name of a section
+		# Don't reuse a name, or use a section name that is also an input
+		# channel name. Bad things will happen.
+
+		A
+		# lower left hand corner of the section
+		Location: 0, 0
+		# size in rows/cols
+		Size: 80, 80
+		# How many iterations to train before propogating
+		Iter: 8000
+
+		B # name of a section
+		Location: 90,0
+		Size: 80,80
+		Iter: 8000
+
+		C # the name of the section # other stuff
+		Location: 180,0
+		Size: 80,80
+		Iter: 80000
+
+		D
+		Location: 270,0
+		Size: 80,80
+		Iter: 80000
+
+		E
+		Location: 270,0
+		Size: 80,80
+		Iter: 80000
+
+		F
+		Location: 270,0
+		Size: 80,80
+		Iter: 80000
+
+		G
+		Location: 270,0
+		Size: 80,80
+		Iter: 80000
+
+		H
+		Location: 270,0
+		Size: 80,80
+		Iter: 80000
+
+		I
+		Location: 270,0
+		Size: 80,80
+		Iter: 80000
+
+	End
+
+	# The order of execution of the sections.
+	#Execution A, B, C, D, E, F, G, H, I
+
+	# This part describes how the section are connected and integrating with
+	# respect to themselves.
+	DataFlow
+
+		# A sections who do not put their data somewhere are considered 
+		# consumers of the data, everyone else is a propogator
+
+		# inputs, in parallel, with input dimensions specified
+		# NOTE: Also, this must be the FIRST line in the DataFlow section...
+		# In addition, input channels better not have the same name as any
+		# section.
+		# In addition, the left right ordering of the inputs are significant
+		# because you must supply the inputs into the cortex in the same order.
+		Input CH_A%1, CH_B%1, CH_C%1
+
+		CH_A -> A:1
+		CH_B -> B:1
+		CH_C -> C:1
+
+		A -> D:1
+		D, B -> G:1/1
+
+		G -> H:1
+		H -> I:1
+
+		I, B, C -> E:1/1/1
+		E -> F:1
+
+		End
+End
+
+
