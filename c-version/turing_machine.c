@@ -190,7 +190,7 @@ void turing_machine_stdout(TuringMachine *tmach)
 	int i;
 
 	printf("---] Step %d\n", tmach->step);
-	printf("State: %d\n", tmach->state);
+	printf("State: %f\n", tmach->state);
 
 	// emit tape
 	for (i = 0; i < TAPE_SIZE; i++) {
