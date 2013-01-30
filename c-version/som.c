@@ -275,7 +275,7 @@ void som_bmu_fixed(SOM *s, Symbol *p, int *row, int *col, int dx, int dy)
 	or moved into classification mode, prow, and pcol contain the best matching
 	unit regardless if in training or classification mode */
 unsigned int som_learn(SOM *s, Symbol *p, int *prow, int *pcol, int dx, int dy,
-	int request)
+	int request, int bmu_supplied)
 {
 	float rad;
 	int srow, scol;
@@ -288,7 +288,13 @@ unsigned int som_learn(SOM *s, Symbol *p, int *prow, int *pcol, int dx, int dy,
 	int row, col;
 
 	/* figure out the best matching unit in context of the input p */
-	som_bmu(s, p, prow, pcol, SOM_BMU_METHOD_CENTROID, dx, dy);
+	if (bmu_supplied == FALSE) {
+		// If we _don't_ supply the bmu, then calculate it given the SOM and
+		// the input symbol and return it in the prow and pcol parameters.
+		som_bmu(s, p, prow, pcol, SOM_BMU_METHOD_CENTROID, dx, dy);
+	}
+
+	// If we do supply the bmu (or calculated it above) we use it here.
 	row = *prow;
 	col = *pcol;
 

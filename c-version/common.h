@@ -12,6 +12,15 @@ enum
 	NOT_FOUND = -1
 };
 
+enum 
+{
+	STATE_RUNNING,
+	STATE_QUALITY,
+	STATE_ACTUAL,
+	STATE_MOUSE_DOWN,
+	STATE_EXIT
+};
+
 #include "utils.h"
 #include "symbol.h"
 #include "slq.h"
@@ -23,5 +32,6 @@ enum
 #include "conv.h"
 
 #include "vinput.h"
+#include "turing_machine.h"
 
 #endif

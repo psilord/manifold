@@ -11,7 +11,8 @@ SRCS = cortex.c \
 	slq.c \
 	conv.c \
 	utils.c \
-	vinput.c
+	vinput.c \
+	turing_machine.c
 
 # name of the created program
 TARGET = de

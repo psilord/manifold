@@ -10,15 +10,6 @@
 
 #include "common.h"
 
-enum 
-{
-	STATE_RUNNING,
-	STATE_QUALITY,
-	STATE_ACTUAL,
-	STATE_MOUSE_DOWN,
-	STATE_EXIT
-};
-
 #define HEIGHT 360
 #define WIDTH 960
 
@@ -605,12 +596,17 @@ int main(int argc, char **argv)
 {
 	int width;
 	int height;
+
+/* The #if 0 in this function are for the vision cortex behavior */
+#if 0
 	char buf[2048];
 	char filename[2048];
+#endif
 
 	width = WIDTH;
 	height = HEIGHT;
 
+#if 0
 	/* call mojify on the cortex file */
 	if (argc == 2) {
 		sprintf(buf, "./mojify %s", argv[1]);
@@ -623,18 +619,19 @@ int main(int argc, char **argv)
 		printf("Supply a file please\n");
 		exit(EXIT_FAILURE);
 	}
-	
+
 	sprintf(filename, "a.lctx");
+#endif
 
 	setup_opengl(width, height);
 
 	srand48(getpid());
 
-/*	test_cortex_ascii(filename);*/
-
+#if 0
 	test_cortex_vision(filename);
-	
-	SDL_Quit();
+#endif
+
+	test_turing_machine();
 	
 	exit(0);
 }

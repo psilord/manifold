@@ -112,7 +112,7 @@ void som_bmu(SOM *s, Symbol *p, int *row, int *col, int method, int dx, int dy);
 	classification mode. Also, I can ask this function to merely classify the
 	input, or actually perform learning on it for each symbol if I choose. */
 unsigned int som_learn(SOM *s, Symbol *p, int *prow, int *pcol, int dx, int dy,
-	int request);
+	int request, int bmu_supplied);
 
 int som_get_rows(SOM *s);
 int som_get_cols(SOM *s);

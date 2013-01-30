@@ -760,14 +760,14 @@ CortexOutputTable* cortex_process(Cortex *core, Symbol **inputs,
 					core->sec[location].state = 
 						som_learn(core->sec[location].som, sym, &prow, &pcol,
 						core->sec[location].x, core->sec[location].y,
-						SOM_REQUEST_CLASSIFY);
+						SOM_REQUEST_CLASSIFY, FALSE);
 					break;
 
 				case CORTEX_REQUEST_LEARN:
 					core->sec[location].state = 
 						som_learn(core->sec[location].som, sym, &prow, &pcol,
 						core->sec[location].x, core->sec[location].y,
-						SOM_REQUEST_LEARN);
+						SOM_REQUEST_LEARN, FALSE);
 					break;
 
 				default:
