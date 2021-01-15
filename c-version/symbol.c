@@ -465,7 +465,7 @@ void symbol_stdout(Symbol *sym)
 	printf("Symbol[%d]: ", sym->dim);
 	for (i = 0; i < sym->dim; i++)
 	{
-		printf("%f ", sym->vec[i]);
+		printf("%.16f ", sym->vec[i]);
 	}
 	printf("\n");
 }

@@ -10,7 +10,7 @@
 
 #include "common.h"
 
-#define HEIGHT 360
+#define HEIGHT 512
 #define WIDTH 960
 
 /* A simple test program to see if I can initialize the SDL library, 
@@ -592,13 +592,17 @@ void test_cortex_vision(char *filename)
 	vinput_destroy(vinp);
 }
 
+/*#define VISION_DEMO*/
+#define TURING_DEMO
+/*#define FS_DEMO*/
+
 int main(int argc, char **argv)
 {
 	int width;
 	int height;
 
 /* The #if 0 in this function are for the vision cortex behavior */
-#if 0
+#if defined(VISION_DEMO)
 	char buf[2048];
 	char filename[2048];
 #endif
@@ -606,7 +610,7 @@ int main(int argc, char **argv)
 	width = WIDTH;
 	height = HEIGHT;
 
-#if 0
+#if defined(VISION_DEMO)
 	/* call mojify on the cortex file */
 	if (argc == 2) {
 		sprintf(buf, "./mojify %s", argv[1]);
@@ -627,11 +631,17 @@ int main(int argc, char **argv)
 
 	srand48(getpid());
 
-#if 0
+#if defined(VISION_DEMO)
 	test_cortex_vision(filename);
 #endif
 
+#if defined(TURING_DEMO)
 	test_turing_machine();
+#endif
+
+#if defined(FS_DEMO)
+	test_filesystem();
+#endif
 	
 	exit(0);
 }

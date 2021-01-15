@@ -209,21 +209,21 @@ void vinput_corrupt(VInput *vinp, Symbol **glyph, float per_pixels,
 					rnd = drand48() * per_range;
 					switch(range_style)
 					{
-						case VINPUT_RANGE_DOWN:
+						case NOISE_RANGE_DOWN:
 							/* calculate the new value based upon 
 								movement of this value down by the percentage
 								specfied toward zero */
 							vals[j] = vals[j] - vals[j]*rnd;
 							break;
 
-						case VINPUT_RANGE_UP:
+						case NOISE_RANGE_UP:
 							/* calculate the new value based upon 
 								movement of this value up by the percentage
 								specfied toward one */
 							vals[j] = vals[j] + (1.0 - vals[j])*rnd;
 							break;
 
-						case VINPUT_RANGE_RANDOM:
+						case NOISE_RANGE_RANDOM:
 							if (drand48() < .5) {
 								vals[j] = vals[j] - vals[j]*rnd;
 							} else {

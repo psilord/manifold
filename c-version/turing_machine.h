@@ -23,11 +23,15 @@ typedef struct TuringMachine_s {
 
 	// Keep track of the execution step for display
 	int step;
+	// If the turing goes off tape, mark it invalid and never execute it
+	// again.
+	int valid; 
 
 } TuringMachine;
 
 void test_turing_machine(void);
 TuringMachine* turing_machine_init(int iterations);
 int turing_machine_train(TuringMachine *tmach);
+void turing_machine_corrupt(Symbol *sym, int style);
 
 #endif

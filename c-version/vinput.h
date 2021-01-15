@@ -1,13 +1,5 @@
 #ifndef VISION_H
 
-enum 
-{
-	VINPUT_RANGE_DOWN,
-	VINPUT_RANGE_UP,
-	VINPUT_RANGE_RANDOM
-};
-
-
 typedef struct VInput_s
 {
 	/* the size of the entire bitmap image */

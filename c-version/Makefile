@@ -12,14 +12,15 @@ SRCS = cortex.c \
 	conv.c \
 	utils.c \
 	vinput.c \
-	turing_machine.c
+	turing_machine.c \
+	file_system.c
 
 # name of the created program
 TARGET = de
 
 # Flags I wish to define on the compile line.
 DEF_FLAGS = -g -Wall
-#DEF_FLAGS = -O3 -Wall -march=native -mtune=native
+#DEF_FLAGS = -O3 -Wall -mtune=native -funsafe-loop-optimizations -ffast-math -funsafe-math-optimizations
 
 
 # Where to find various libraries.

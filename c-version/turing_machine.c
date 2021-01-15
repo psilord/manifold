@@ -94,8 +94,33 @@ TuringMachine* turing_machine_init(int iterations)
 	}
 
 	tmach->step = 0;
+	tmach->valid = TRUE;
 
 	return tmach;
+}
+
+// Zero mean (+/-) noise in every dimension
+void symbol_corrupt(float per_chance, float per_range, Symbol *sym) 
+{
+	int i;
+	float rnd;
+	float val;
+
+	rnd = drand48();
+
+	if (rnd < per_chance) {
+		// jitter the symbol around in a sphere the possible size of per_range.
+		for (i = 0; i < symbol_get_dim(sym); i++) {
+			rnd = drand48() * per_range;
+			symbol_get_index(sym, &val, i);
+			if (drand48() < .5) {
+				val = val - val * rnd;
+			} else {
+				val = val + (1.0 - val) * rnd;
+			}
+			symbol_set_index(sym, val, i);
+		}
+	}
 }
 
 int turing_machine_train(TuringMachine *tmach)
@@ -103,20 +128,29 @@ int turing_machine_train(TuringMachine *tmach)
 	int state;
 	int bmu_row, bmu_col;
 
+	Symbol *corrupted_precept = symbol_copy(tmach->perceptions[tmach->symdex]);
+	Symbol *corrupted_action = symbol_copy(tmach->actions[tmach->symdex]);
+
+	symbol_corrupt(0.10, 0.2, corrupted_precept);
+	symbol_corrupt(0.10, 0.2, corrupted_action);
+
 	// we round robin across the perception and action symbols.
 	// First, learn the perception and get the BMU from the learning.
 	// NOTE: we don't save the state since both SOMs are lock stepped in
 	// when they'll change to classifying.
-	som_learn(tmach->perception, tmach->perceptions[tmach->symdex], 
+	som_learn(tmach->perception, corrupted_precept,
 		&bmu_row, &bmu_col, 0, 128, SOM_REQUEST_LEARN, FALSE);
 
 	// Then, take the BMU from the perception SOM, and use it as the
 	// direct place we are to learn the action in the actions SOM.
-	state = som_learn(tmach->action, tmach->actions[tmach->symdex], 
+	state = som_learn(tmach->action, corrupted_action,
 		&bmu_row, &bmu_col, 128, 128, SOM_REQUEST_LEARN, TRUE);
 	
 	tmach->symdex++;
 	tmach->symdex %= 6;
+
+	symbol_free(corrupted_precept);
+	symbol_free(corrupted_action);
 
 	return state;
 }
@@ -127,6 +161,12 @@ void turing_machine_step(TuringMachine *tmach)
 	Symbol *precept = NULL;
 	Symbol *act = NULL;
 	float new_state, write_value, head_move;
+
+	if (tmach->valid == FALSE) {
+		return;
+	}
+
+	printf("Execute a step.\n");
 
 	precept = symbol_init(2);
 
@@ -152,13 +192,13 @@ void turing_machine_step(TuringMachine *tmach)
 		tmach->head++;
 		if (tmach->head == TAPE_SIZE) {
 			printf("Turing machine off tape boundary.\n");
-			exit(EXIT_FAILURE);
+			tmach->valid = FALSE;
 		}
 	} else {
 		tmach->head--;
 		if (tmach->head < 0) {
 			printf("Turing machine off tape boundary.\n");
-			exit(EXIT_FAILURE);
+			tmach->valid = FALSE;
 		}
 	}
 
@@ -217,7 +257,7 @@ void turing_machine_stdout(TuringMachine *tmach)
 	printf("\n");
 }
 
-// Since this 
+
 void test_turing_machine(void)
 {
 	int state = STATE_RUNNING;
@@ -227,7 +267,7 @@ void test_turing_machine(void)
 	int mr, mc;
 	int iter;
 	int glerr;
-	TuringMachine *tmach = turing_machine_init(3000);
+	TuringMachine *tmach = turing_machine_init(100000);
 	Symbol *lookup = NULL;
 	float val0, val1, val2;
 
@@ -286,10 +326,11 @@ void test_turing_machine(void)
 		if (tmach_state == SOM_CLASSIFYING) {
 			// Perceive the machine state, execute a step of the Turing
 			// machine, and print out the new state.
-			printf("Execute a step.\n");
 			turing_machine_step(tmach);
-			turing_machine_stdout(tmach);
-			usleep(250);
+			if (tmach->valid == TRUE) {
+				turing_machine_stdout(tmach);
+			}
+			usleep(500);
 		}
 
 		if (now > sample || tmach_state == SOM_CLASSIFYING)

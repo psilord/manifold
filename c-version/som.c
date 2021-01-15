@@ -80,6 +80,13 @@ SOM* som_init(unsigned short dim, unsigned int train_iter, unsigned int rows,
 	s->final_computation = FALSE;
 	s->qmap = (float*)xmalloc(sizeof(float) * (s->sd.rows * s->sd.cols));
 
+	/* For the exponential decay model, given max iterations, what is our 
+		half-life if we want to have a neighborhood of 
+		(+.5. -.5)  around the learning point). 
+	*/
+	s->half_life = 
+		-((log(2.0) * s->sd.train_iter) / log(.5 / s->initial_radius));
+
 	return s;
 }
 
@@ -133,12 +140,15 @@ void som_bmu_centroid(SOM *s, Symbol *p, int *row, int *col, int dx, int dy)
 		for (c = 0; c < s->sd.cols; c++)
 		{
 			sym = som_symbol_ref(s, r, c);
+
+			/* TODO: Get a better distance function here. Euclidean distance
+				starts to fail in higher dimensions. */
 			dist = symbol_fdist(sym, p);
 			
 			/* if the neuron in question is so close to the symbol in question,
 				them make sure I evenly pick one out of the entire set of 
 				"too close" neurons */
-			if (fabs(dist - best_dist_so_far) < 1e-13)
+			if (fabs(dist - best_dist_so_far) < 1e-15)
 			{
 				/* sum everything up for the averaging later... */
 				drow += r;
@@ -146,11 +156,13 @@ void som_bmu_centroid(SOM *s, Symbol *p, int *row, int *col, int dx, int dy)
 				/* the divisor for the number of matches found */
 				num_matches++;
 				
+#if 1
 				/* mark as red the coincident symbols */
-/*				glBegin(GL_POINTS);*/
-/*					glColor3f(1.0, 0.0, 0.0);*/
-/*					glVertex3f(c+dx, r+dy, .2);*/
-/*				glEnd();*/
+				glBegin(GL_POINTS);
+					glColor3f(1.0, 0.0, 0.0);
+					glVertex3f(c+dx, r+dy, .2);
+				glEnd();
+#endif
 			}
 			else if (dist < best_dist_so_far)
 			{
@@ -167,12 +179,14 @@ void som_bmu_centroid(SOM *s, Symbol *p, int *row, int *col, int dx, int dy)
 				/* force the calculation of the centroid of neurons close to
 					THIS particular best_dist_so_far group of neurons. */
 				num_matches = 1;
-				
+			
+#if 1
 				/* mark as green the symbols better than the last symbols */
-/*				glBegin(GL_POINTS);*/
-/*					glColor3f(0.0, 1.0, 0.0);*/
-/*					glVertex3f(c+dx, r+dy, .2);*/
-/*				glEnd();*/
+				glBegin(GL_POINTS);
+					glColor3f(0.0, 1.0, 0.0);
+					glVertex3f(c+dx, r+dy, .2);
+				glEnd();
+#endif
 			}
 		}
 	}
@@ -193,7 +207,7 @@ void som_bmu_fixed(SOM *s, Symbol *p, int *row, int *col, int dx, int dy)
 {
 	int r, c;
 	double dist;
-	double best_dist_so_far = 999999;
+	double best_dist_so_far = 9999999.0;
 	int num_matches = 0;
 	int rnd;
 	int prob;
@@ -209,7 +223,7 @@ void som_bmu_fixed(SOM *s, Symbol *p, int *row, int *col, int dx, int dy)
 			/* if the neuron in question is so close to the symbol in question,
 				them make sure I evenly pick one out of the entire set of 
 				"too close" neurons */
-			if (fabs(dist - best_dist_so_far) < 1e-13)
+			if (fabs(dist - best_dist_so_far) < 1e-15)
 			{
 				/* XXX BEGIN Experimental */
 				/* Since I've changed the algorithm to integrate locations on
@@ -285,7 +299,6 @@ unsigned int som_learn(SOM *s, Symbol *p, int *prow, int *pcol, int dx, int dy,
 	float g, l;
 	float delta, t;
 	Symbol *sym;
-	int row, col;
 
 	/* figure out the best matching unit in context of the input p */
 	if (bmu_supplied == FALSE) {
@@ -294,9 +307,10 @@ unsigned int som_learn(SOM *s, Symbol *p, int *prow, int *pcol, int dx, int dy,
 		som_bmu(s, p, prow, pcol, SOM_BMU_METHOD_CENTROID, dx, dy);
 	}
 
-	// If we do supply the bmu (or calculated it above) we use it here.
-	row = *prow;
-	col = *pcol;
+	/* Now that we determined where our BMU is, store it. This is so we can
+		visualize it better after the fact and such */
+	s->bmu_row = *prow;
+	s->bmu_col = *pcol;
 
 	/* if I've asked to train beyond my maximum iterations, then automatically
 		move into classification mode */
@@ -323,22 +337,66 @@ unsigned int som_learn(SOM *s, Symbol *p, int *prow, int *pcol, int dx, int dy,
 	/* figure how far along the training path I am */
 	t = (float)s->current_iter * delta;
 
+
+
+
+
+	/* Decay model. TODO: Lift into SOMDesc. */
+
 	/* how my neighborhood shrinks in unit space wrt how far I am in learning */
 	/* LINEAR DECAY */
-	rad = s->initial_radius * (1.0 - t); 
+/*	rad = s->initial_radius * (1.0 - t); */
 
 	/* SIGMOIDAL DECAY */
 	/* the sigmoid goes from -1 to 1 in t steps... */
 /*	rad = s->initial_radius * */
 /*		(1.0 - (1.0 / (1.0 + exp(-5.0 * (-1.0 + (2.0 * t))))));*/
 
+	/* EXPONENTIAL DECAY */
+	/* Here we want it so that at the last iteration, the neighborhood size
+		is .5 (since it cannot be zero due to transcendental mathematics).
+		A neightborhood of .5 represents a neghborhood of
+		one neuron (since we add/sub the value to find the convolution kernel),
+		so that should be good.
+
+		We'd like the final iteration to have a neighborhood of one. So:
+		end = start * 2 ^ (-i / h);    (1) 
+
+		start is the start neighborhood size (calcaulated earlier).
+		end is the end neighborhood size when done (1).
+		i is the train_iter for this SOM
+		h is the half-life (which we need to compute).
+
+		analytically solve for half-life h:
+		h = -((log(2) * i) / log(end / start));  (2) 
+
+		Then all the values are known for (2) and we put the value
+		we compute for (2) into (1) as i marches towards the
+		final iteration.
+
+		h is computed in som_init() (aka half_life).
+
+		Then as we compute the below, we mark our time passed in
+		s->current_iter until we get to sd->train_iter at the end.
+
+		This method focuses on quickly arranging the clusters in the
+		high dimensional space, but then spending a good while refining
+		the clusters to be the input features.
+	*/
+	rad = s->initial_radius * powf(2.0, (-s->current_iter / s->half_life));
+
+
+
+
+
+
 	/* bound rad to a small value if it is less than a constant, this prevents
 	 	the division in the loops from blowing up too badly. This makes a shell
-		of 1e-8 size around the point in question. This is ok for now...
+		of 1e-15 size around the point in question. This is ok for now...
 	*/
-	if (fabs(rad) < 1e-8)
+	if (fabs(rad) < 1e-15)
 	{
-		rad = 1e-8;
+		rad = 1e-15;
 	}
 
 	/* produce the clipped box set up with the radius from the
@@ -346,25 +404,25 @@ unsigned int som_learn(SOM *s, Symbol *p, int *prow, int *pcol, int dx, int dy,
 		neighbors.  this gets smaller and smaller each iteration
 	*/
 
-	srow = row - rad;
+	srow = s->bmu_row - rad;
 	if (srow < 0)
 	{
 		srow = 0;
 	}
 
-	scol = col - rad;
+	scol = s->bmu_col - rad;
 	if (scol < 0)
 	{
 		scol = 0;
 	}
 
-	erow = row + rad;
+	erow = s->bmu_row + rad;
 	if (erow >= s->sd.rows)
 	{
 		erow = s->sd.rows - 1;
 	}
 
-	ecol = col + rad;
+	ecol = s->bmu_col + rad;
 	if (ecol >= s->sd.cols)
 	{
 		ecol = s->sd.cols - 1;
@@ -380,8 +438,8 @@ unsigned int som_learn(SOM *s, Symbol *p, int *prow, int *pcol, int dx, int dy,
 		{
 			/* ok, find the distance from the row, col, location to the 
 				i, j location */
-			t0 = i - row;
-			t1 = j - col;
+			t0 = i - s->bmu_row;
+			t1 = j - s->bmu_col;
 			dist = sqrt(t0*t0 + t1*t1);
 			/* rad is bound to a non-zero value outside of the function.
 				This is so I do not have to do a division by zero check here
@@ -418,6 +476,16 @@ int som_get_rows(SOM *s)
 int som_get_cols(SOM *s)
 {
 	return s->sd.cols;
+}
+
+int som_get_bmu_row(SOM *s)
+{
+	return s->bmu_row;
+}
+
+int som_get_bmu_col(SOM *s)
+{
+	return s->bmu_col;
 }
 
 void som_free(SOM *s)
@@ -544,8 +612,8 @@ static void som_draw_quality(SOM *s, unsigned int quality, int x, int y)
 		for (col = 0; col < s->sd.cols - 1; col++)
 		{
 			/* don't forget to normalize it */
-			/* in this math, the densest part of the cluster will be
-				black, while the outlying areas are white */
+			/* in this convolution, the neurons which are closest together will
+				be white, and those farthest apart will be black */
 			v0 = 1.0 - (s->qmap[SOM_ADR(row, col, s)] / s->max_dist);
 			v1 = 1.0 - (s->qmap[SOM_ADR(row, col+1, s)] / s->max_dist);
 			v2 = 1.0 - (s->qmap[SOM_ADR(row+1, col+1, s)] / s->max_dist);
@@ -564,6 +632,31 @@ static void som_draw_quality(SOM *s, unsigned int quality, int x, int y)
 			glVertex3f(x + col, y + row+1, 0.0);
 		}
 	}
+	glEnd();
+}
+
+void som_draw_reticule(SOM *s, int x, int y, int row, int col)
+{
+	/* draw a little box around the specified location in x, y. It is
+		colored yellow if the SOM is still learning and green otherwise. */
+
+	glBegin(GL_LINE_LOOP);
+	switch(s->mode)
+	{
+		case SOM_LEARNING:
+			glColor3f(1, 1, 0);
+			break;
+		case SOM_CLASSIFYING:
+			glColor3f(0, 1, 0);
+			break;
+		default:
+			glColor3f(1, 0, 0);
+		break;
+	}
+	glVertex3f(col-10+x, row-10+y, 0.5);
+	glVertex3f(col-10+x, row+10+y, 0.5);
+	glVertex3f(col+10+x, row+10+y, 0.5);
+	glVertex3f(col+10+x, row-10+y, 0.5);
 	glEnd();
 }
 

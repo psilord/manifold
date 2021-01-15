@@ -631,6 +631,8 @@ void cortex_draw(Cortex *core, int style)
 				glVertex3f(col+sec->x, row+sec->y, 0.5);
 			glEnd();
 
+			/* TODO: update this to use som_draw_reticule() */
+
 			/* draw a little box around the last learning location */
 			glBegin(GL_LINE_LOOP);
 			switch(core->sec[i].state)

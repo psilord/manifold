@@ -66,6 +66,9 @@ typedef struct SOM_s
 		what the classification was, I should start relearning */
 	int mode;
 
+	/* store here the row/col of the last time we determined a BMU */
+	int bmu_row, bmu_col;
+
 	/* the initial physical characteristics of this som */
 	SOMDesc sd;
 
@@ -74,6 +77,10 @@ typedef struct SOM_s
 
 	/* how large is the initial neighborhood */
 	float initial_radius;
+
+	/* half-life constant computed so that at the end of the training period,
+		the neighborhood will be 1. */
+	float half_life;
 
 	/* the array of the neurons, they are symbols of all the same dimension. */
 	Symbol **neuron;
@@ -116,6 +123,8 @@ unsigned int som_learn(SOM *s, Symbol *p, int *prow, int *pcol, int dx, int dy,
 
 int som_get_rows(SOM *s);
 int som_get_cols(SOM *s);
+int som_get_bmu_row(SOM *s);
+int som_get_bmu_col(SOM *s);
 
 /* Am I in classification or learning mode? */
 unsigned int som_get_mode(SOM *s);
@@ -138,6 +147,10 @@ void som_free(SOM *s);
 
 /* draw the SOM, either drawing the neurons themselves, or the quality map */
 void som_draw(SOM *s, unsigned int style, int x, int y);
+
+/* Draw a reticule (whose color changes if the SOM is learning or not) around
+	the row,col point in the SOM which is located at x,y. */
+void som_draw_reticule(SOM *s, int x, int y, int row, int col);
 
 #endif
 
